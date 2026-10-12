@@ -2,7 +2,7 @@
 solar_manager.py — řízení FVE, baterie SolaX a spotřebičů podle přebytku a spotové ceny
 AppDaemon app pro Home Assistant
 
-INSTALACE
+INSTALACE (podrobně viz README.md)
   1. Ulož tento soubor do složky apps AppDaemonu:
        /addon_configs/a0d7b954_appdaemon/apps/solar_manager.py
      (u starších instalací: /config/appdaemon/apps/solar_manager.py)
@@ -33,6 +33,12 @@ import appdaemon.plugins.hass.hassapi as hass
 DRY_RUN = True   # True = jen loguje, False = opravdu spíná
 
 CFG = {
+    # ── Hlavní vypínač (volitelný) ───────────────────────────────────
+    # input_boolean v HA; když je vypnutý, skript nic neřídí.
+    # Vytvoř ho v Nastavení → Zařízení a služby → Pomocníci → Přepínač.
+    # Nech prázdné "", pokud ho nechceš.
+    "master_switch":    "input_boolean.solar_manager",       # ZMĚŇ nebo ""
+
     # ── Spotová cena (integrace „Spotové ceny energií v Česku“) ──────
     "spot_price":       "sensor.current_spot_electricity_price",  # ZMĚŇ podle svého HA
     "price_unit":       "czk_kwh",   # "czk_kwh" nebo "eur_mwh"
@@ -48,7 +54,11 @@ CFG = {
     "battery_soc":      "sensor.solax_battery_capacity",     # ZMĚŇ  SOC [%]
     "battery_power":    "sensor.solax_battery_power_charge", # ZMĚŇ  [W] + nabíjí / − vybíjí
     "grid_power":       "sensor.solax_measured_power",       # ZMĚŇ  [W] + export / − odběr ze sítě
-    "phase_currents": [                                      # ZMĚŇ  proudy fází [A]
+    # Pokud tvůj senzor ukazuje znaménka obráceně (viz README, „Kontrola znamének“),
+    # přepni na True:
+    "battery_invert":   False,
+    "grid_invert":      False,
+    "phase_currents": [                                      # ZMĚŇ  proudy fází ze SÍTĚ [A]
         "sensor.solax_current_l1",
         "sensor.solax_current_l2",
         "sensor.solax_current_l3",
@@ -63,7 +73,7 @@ CFG = {
 
     # ── Baterie (20 kWh) ─────────────────────────────────────────────
     "battery_capacity_kwh":   20,
-    "battery_soc_min":        20,    # pod tím nevybíjet
+    "battery_soc_min":        20,    # jen informace — minimální SOC nastav přímo ve střídači
     "grid_charge_enabled":    True,  # nabíjet ze sítě v levných hodinách
     "grid_charge_max_soc":    90,    # do kolika % nabíjet ze sítě
     "battery_priority_soc":   80,    # pod tím má baterie přednost před spotřebiči
@@ -81,15 +91,17 @@ CFG = {
     # ── Spotřebiče v pořadí priority (první = nejdůležitější) ───────
     # type:
     #   "switch"        — obyčejné relé / zásuvka (bojler)
-    #   "ev"            — wallbox; "current" = number entita proudu, nebo None (jen zap/vyp)
+    #   "ev"            — wallbox; "current" = number/select entita proudu, nebo None (jen zap/vyp)
     #   "climate_boost" — TČ přes climate entitu: v levné době / při přebytku
     #                     zvedne teplotu o "boost" °C, jinak vrátí "base_temp"
     # cheap: True = v levných a záporných hodinách zapnout i ze sítě
+    # phases: 1 nebo 3 — kolik fází spotřebič zatěžuje (bojler bývá 1)
     "loads": [
         {
             "id": "boiler", "name": "Bojler", "type": "switch",
             "entity": "switch.bojler",                       # ZMĚŇ
-            "power_w": 2000, "cheap": True, "enabled": True,
+            "power_w": 2000, "phases": 1,
+            "cheap": True, "enabled": True,
         },
         {
             "id": "ev1", "name": "Wallbox 1 (Modbus)", "type": "ev",
@@ -109,7 +121,8 @@ CFG = {
             "id": "hp", "name": "Tepelné čerpadlo", "type": "climate_boost",
             "entity": "climate.tepelne_cerpadlo",            # ZMĚŇ
             "base_temp": 21.0, "boost": 1.5,
-            "power_w": 3000, "cheap": True, "enabled": False,
+            "power_w": 3000, "phases": 3,
+            "cheap": True, "enabled": False,
         },
     ],
 }
@@ -128,35 +141,71 @@ class SolarManager(hass.Hass):
         self.loads = [l for l in self.c["loads"] if l.get("enabled")]
         self.sent = {}   # poslední odeslané příkazy (proti opakování)
         self.st = {}     # stav spotřebičů: on, t (čas změny), amps
+        self.paused = False
+
+        self.check_entities()
 
         for l in self.loads:
-            on = False
-            if l["type"] == "switch":
-                on = self.get_state(l["entity"]) == "on"
-            elif l["type"] == "ev":
-                on = self.get_state(l["switch"]) == "on"
-            self.st[l["id"]] = {"on": on, "t": 0.0, "amps": l.get("min_a", 0)}
+            amps = l.get("min_a", 0)
+            if l["type"] == "ev" and l.get("current"):
+                real = self.num(l["current"])
+                if real is not None:
+                    amps = int(real)
+            self.st[l["id"]] = {"on": self.real_on(l) or False, "t": 0.0, "amps": amps}
 
         self.run_every(self.loop, "now", self.c["loop_interval_s"])
         mode = "NA SUCHO (nic nespíná)" if DRY_RUN else "OSTRÝ PROVOZ"
         names = ", ".join(l["name"] for l in self.loads) or "žádné"
         self.log(f"SolarManager spuštěn ✓  režim: {mode}  |  spotřebiče: {names}")
 
+    def check_entities(self):
+        """Při startu upozorní na entity, které v HA neexistují (překlep v názvu)."""
+        ents = [self.c["spot_price"], self.c["pv_power"], self.c["battery_soc"],
+                self.c["battery_power"], self.c["grid_power"], self.c["master_switch"],
+                self.c["work_mode_select"], self.c["export_limit"],
+                *self.c["phase_currents"]]
+        for l in self.loads:
+            ents += [l.get("entity"), l.get("switch"), l.get("current")]
+        for e in ents:
+            if e and not self.entity_exists(e):
+                self.log(f"✗ Entita {e} v HA neexistuje — zkontroluj název v konfiguraci",
+                         level="WARNING")
+        if not self.c["phase_currents"]:
+            self.log("Nejsou zadané proudy fází — spotřebiče se nebudou zapínat "
+                     "(nelze hlídat jistič)", level="WARNING")
+
     # ── Hlavní smyčka ────────────────────────────────────────────────
 
     def loop(self, kwargs):
+        master = self.c["master_switch"]
+        if master and self.get_state(master) == "off":
+            if not self.paused:
+                self.log("Hlavní vypínač je vypnutý — neřídím nic")
+                self.paused = True
+            return
+        if self.paused:
+            self.log("Hlavní vypínač zapnut — pokračuji")
+            self.paused = False
+            self.sent.clear()
+
         price = self.price()
         grid = self.num(self.c["grid_power"])
         if price is None or grid is None:
             self.log("Chybí cena nebo výkon sítě — tento krok přeskakuji", level="WARNING")
             return
+        if self.c["grid_invert"]:
+            grid = -grid
 
         soc = self.num(self.c["battery_soc"]) or 0.0
         batt = self.num(self.c["battery_power"]) or 0.0
+        if self.c["battery_invert"]:
+            batt = -batt
         pv = self.num(self.c["pv_power"]) or 0.0
 
+        self.sync_states()
+
         currents = [self.num(e) for e in self.c["phase_currents"]]
-        phase_ok = all(a is not None for a in currents)
+        phase_ok = bool(currents) and all(a is not None for a in currents)
         max_a = max(abs(a) for a in currents) if phase_ok else None
         limit_a = self.c["fuse_limit_a"] - self.c["fuse_reserve_a"]
 
@@ -181,10 +230,33 @@ class SolarManager(hass.Hass):
         if band in ("záporná", "levná"):
             self.cheap_mode(free_a, phase_ok)
         else:
-            surplus = grid
+            # Přebytek = co jde do sítě. Vybíjení baterie se počítá jako odběr,
+            # jinak by v režimu Self Use baterie potichu „krmila“ bojler/auto.
+            surplus = grid + min(batt, 0.0)
             if soc >= self.c["battery_priority_soc"] and batt > 0:
                 surplus += batt   # nabíjení plné baterie můžeme přesměrovat do spotřebičů
             self.solar_mode(surplus, free_a, phase_ok, band)
+
+    def sync_states(self):
+        """Převezme skutečný stav spínačů z HA (ruční zapnutí/vypnutí, výpadek)."""
+        if DRY_RUN:
+            return   # na sucho se nic nespíná, držíme si simulovaný stav
+        for l in self.loads:
+            real = self.real_on(l)
+            s = self.st[l["id"]]
+            if real is not None and real != s["on"]:
+                self.log(f"{l['name']}: změněno mimo skript → {'zapnuto' if real else 'vypnuto'}")
+                s["on"] = real
+                s["t"] = time.time()
+
+    def real_on(self, l):
+        ent = l.get("switch") if l["type"] == "ev" else l.get("entity")
+        if l["type"] == "climate_boost" or not ent:
+            return None
+        state = self.get_state(ent)
+        if state in ("on", "off"):
+            return state == "on"
+        return None
 
     # ── Pásma ceny ───────────────────────────────────────────────────
 
@@ -245,28 +317,31 @@ class SolarManager(hass.Hass):
                     return  # jeden spotřebič za krok (rozběhové proudy)
             elif l["type"] == "ev" and l.get("current"):
                 # běžící wallbox přidat až na maximum, co jistič dovolí
-                self.set_amps(l, min(l["max_a"], s["amps"] + max(0.0, free_a - 1)))
+                if free_a >= 2:
+                    self.set_amps(l, min(l["max_a"], s["amps"] + free_a - 1))
+                    return
 
     # ── Normální / drahá cena: jen z přebytku ────────────────────────
 
     def solar_mode(self, surplus, free_a, phase_ok, band):
         hyst = self.c["hysteresis_w"]
 
-        # Odběr ze sítě → nejdřív ubrat proud wallboxům, pak vypnout nejméně důležité
+        # Odběr ze sítě / z baterie → nejdřív ubrat proud wallboxům, pak vypnout nejméně důležité
         if surplus < -hyst:
             for l in reversed(self.loads):
                 s = self.st[l["id"]]
                 if s["on"] and l["type"] == "ev" and l.get("current") and s["amps"] > l["min_a"]:
                     step = -surplus / (VOLTAGE * l["phases"])
-                    self.set_amps(l, max(l["min_a"], s["amps"] - step))
+                    self.set_amps(l, max(l["min_a"], s["amps"] - max(1, step)))
                     return
-            self.shed(force=False, reason=f"odběr ze sítě ({band})")
+            self.shed(force=False, reason=f"odběr ze sítě/baterie ({band})")
             return
 
         # Běžící wallboxy doladit podle přebytku
         for l in self.loads:
             s = self.st[l["id"]]
-            if s["on"] and l["type"] == "ev" and l.get("current") and surplus > hyst:
+            if s["on"] and l["type"] == "ev" and l.get("current") and surplus > hyst \
+                    and s["amps"] < l["max_a"]:
                 step = (surplus - hyst) / (VOLTAGE * l["phases"])
                 if step >= 1 and (not phase_ok or free_a >= step):
                     self.set_amps(l, min(l["max_a"], s["amps"] + step))
@@ -311,7 +386,8 @@ class SolarManager(hass.Hass):
         s["t"] = time.time()
 
     def switch(self, entity, on):
-        svc = "switch/turn_on" if on else "switch/turn_off"
+        # homeassistant/turn_on funguje pro switch, input_boolean, light i fan
+        svc = "homeassistant/turn_on" if on else "homeassistant/turn_off"
         self.send(entity, on, svc, entity_id=entity)
 
     def set_amps(self, l, amps):
@@ -321,20 +397,48 @@ class SolarManager(hass.Hass):
             return
         self.log(f"{l['name']}: proud {s['amps']} → {amps} A")
         s["amps"] = amps
-        self.send(l["current"], amps, "number/set_value", entity_id=l["current"], value=amps)
+        ent = l["current"]
+        if ent.startswith("select."):
+            self.send(ent, str(amps), "select/select_option", entity_id=ent, option=str(amps))
+        else:
+            self.send(ent, amps, "number/set_value", entity_id=ent, value=amps)
 
-    def send(self, key, value, service, **kw):
-        if self.sent.get(key) == value:
-            return
-        self.sent[key] = value
+    def send(self, key, desired, service, **kw):
+        # pozor: parametr se nesmí jmenovat „value“ — koliduje s value=… pro number/set_value
         if DRY_RUN:
+            if self.sent.get(key) == desired:
+                return
+            self.sent[key] = desired
             self.log(f"   [NA SUCHO] {service} {kw}")
             return
+        # Ostrý provoz: posílat jen když se skutečný stav v HA liší
+        # (když někdo hodnotu změní ručně, skript ji vrátí).
+        if self.matches(key, desired):
+            self.sent[key] = desired
+            return
+        if self.sent.get(key) == desired and self.sent.get(key + "#t", 0) > time.time() - 60:
+            return   # právě odesláno, zařízení ještě nestihlo potvrdit
+        self.sent[key] = desired
+        self.sent[key + "#t"] = time.time()
         try:
             self.call_service(service, **kw)
         except Exception as e:
             self.log(f"Chyba při {service} {kw}: {e}", level="ERROR")
             self.sent.pop(key, None)
+
+    def matches(self, entity, value):
+        try:
+            if entity.startswith("climate."):
+                cur = self.get_state(entity, attribute="temperature")
+                return cur is not None and abs(float(cur) - float(value)) < 0.05
+            state = self.get_state(entity)
+            if isinstance(value, bool):
+                return state == ("on" if value else "off")
+            if isinstance(value, (int, float)):
+                return abs(float(state) - float(value)) < 0.5
+            return str(state) == str(value)
+        except (ValueError, TypeError):
+            return False
 
     # ── Pomocné výpočty ──────────────────────────────────────────────
 
@@ -348,10 +452,10 @@ class SolarManager(hass.Hass):
         return l.get("power_w", 2000)
 
     def need_a(self, l):
-        """Kolik ampér na nejzatíženější fázi spotřebič přidá (jednofázové = celý výkon na 1 fázi)."""
+        """Kolik ampér na nejzatíženější fázi spotřebič přidá."""
         if l["type"] == "ev":
             return l["min_a"]
-        return l.get("power_w", 2000) / VOLTAGE
+        return l.get("power_w", 2000) / (VOLTAGE * l.get("phases", 1))
 
     def price(self):
         raw = self.num(self.c["spot_price"])

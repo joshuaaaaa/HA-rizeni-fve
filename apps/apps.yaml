@@ -1,0 +1,3 @@
+solar_manager:
+  module: solar_manager
+  class: SolarManager
