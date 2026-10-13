@@ -91,7 +91,7 @@ CFG = {
     "battery_priority_soc":   80,    # pod tím má baterie přednost před spotřebiči
 
     # ── Hlavní jistič ────────────────────────────────────────────────
-    "fuse_limit_a":     32,    # ZMĚŇ podle svého hlavního jističe
+    "fuse_limit_a":     25,    # hlavní jistič 3×25 A
     "fuse_reserve_a":   2,
 
     # ── Chování smyčky ───────────────────────────────────────────────
@@ -130,7 +130,7 @@ CFG = {
             "id": "ev_china", "name": "Nabíječka doma China (Tuya)", "type": "ev",
             "switch": "switch.nabijecka_doma_china",
             "current": "number.nabijecka_doma_china_max_current",
-            "min_a": 6, "max_a": 16, "phases": 3,    # ZMĚŇ fáze, pokud je 1fázová
+            "min_a": 6, "max_a": 14, "phases": 3,    # 3f, 10 kW ≈ 14 A na fázi
             "cheap": True, "enabled": True,
         },
         {

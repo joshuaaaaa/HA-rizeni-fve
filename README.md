@@ -8,7 +8,7 @@ AppDaemon aplikace, která každých 30 s rozhoduje, kam poslat elektřinu:
 | **Levná spotová cena** (pod 1,5 Kč/kWh) | Nabíjí baterii ze sítě (do 90 %) a zapne spotřebiče označené `cheap` i ze sítě. |
 | **Záporná cena** | Vypne přetoky do sítě (export 0 W), nabíjí baterii, zapíná spotřebiče. |
 | **Normální / drahá cena** | Baterie kryje dům (Self Use), spotřebiče běží jen z přebytku. Jakmile začnou brát ze sítě **nebo z baterie**, vypínají se (od nejméně důležitého). |
-| **Hrozí vypadnutí hlavního jističe** (fáze > 30 A) | Okamžitě vypne nejméně důležitý spotřebič. |
+| **Hrozí vypadnutí hlavního jističe** (fáze > 23 A) | Okamžitě vypne nejméně důležitý spotřebič. |
 
 Spotřebu domu skript neřídí, jen ji vidí v měření sítě.
 
@@ -70,7 +70,7 @@ Tipy:
 | Hlídání jističe | `sensor.solax_measured_power_l1..l3` | proud se dopočítá z výkonu fází (W ÷ 230) |
 | Bojler | `switch.boiler_jistic` | ~2,4 kW, 1 fáze |
 | TČ SPRSUN | `select.sprsun_sg_ready_mode` | SG+ při přebytku nebo levné ceně, jinak Normal. **Musí být zapnutý `switch.sprsun_sg_ready_function`.** |
-| Wallbox China (Tuya) | `switch.nabijecka_doma_china` + `number.nabijecka_doma_china_max_current` | ověř počet fází |
+| Wallbox China (Tuya) | `switch.nabijecka_doma_china` + `number.nabijecka_doma_china_max_current` | 3 fáze, 10 kW, 6–14 A |
 | Wallbox Olife (Modbus) | zápis do registru 2106 (hub `olife_energy`), zpětně `sensor.current_limit_control` | 0 A = nenabíjí, 6–16 A = nabíjí. Žádný vypínač nemá. |
 
 **Automatizace, které se se skriptem perou.** Před ostrým provozem je vypni (Nastavení → Automatizace), jinak budou dvě věci ovládat totéž:
@@ -127,7 +127,7 @@ Přepni `DRY_RUN = False` a ulož. AppDaemon soubor načte sám. Začni s jední
 | `price_expensive` | 4,5 | Nad touto cenou = drahá hodina |
 | `grid_charge_max_soc` | 90 | Do kolika % nabíjet baterii ze sítě |
 | `battery_priority_soc` | 80 | Pod tímto SOC má baterie přednost před spotřebiči |
-| `fuse_limit_a` / `fuse_reserve_a` | 32 / 2 | Hlavní jistič a rezerva |
+| `fuse_limit_a` / `fuse_reserve_a` | 25 / 2 | Hlavní jistič a rezerva |
 | `hysteresis_w` | 200 | Pásmo necitlivosti, aby to necvakalo |
 | `min_on_s` / `min_off_s` | 300 | Minimální doba zapnutí/vypnutí spotřebiče |
 
