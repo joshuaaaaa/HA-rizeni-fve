@@ -117,6 +117,21 @@ Nech to tak běžet 2–3 dny a kontroluj, že rozhodnutí dávají smysl.
 ### 7. Ostrý provoz
 Přepni `DRY_RUN = False` a ulož. AppDaemon soubor načte sám. Začni s jedním spotřebičem (bojler), další přidávej postupně přes `"enabled": True`.
 
+### 8. Stránka (dashboard) pro sledování a ovládání
+Skript každých 30 s zapisuje do HA dva senzory:
+
+* `sensor.solar_manager`: stav (záporná / levná / normální / drahá / jistič! / pozastaveno / chyba dat). V atributech je cena, přebytek, FVE, síť, baterie, fáze, stav spotřebičů a **posledních 20 řádků logu**.
+* `sensor.solar_manager_prebytek`: přebytek pro spotřebiče ve W, aby šel kreslit do grafu.
+
+Vložení stránky:
+1. **Nastavení → Ovládací panely → Přidat ovládací panel → Nový ovládací panel od začátku**, název třeba „Řízení FVE“.
+2. Otevři ho → vpravo nahoře **tužka** → **⋮** → **Editor nezpracované konfigurace**.
+3. Smaž všechno a vlož celý soubor [`dashboard/solar_manager.yaml`](dashboard/solar_manager.yaml) → **Uložit**.
+
+Na stránce je: hlavní vypínač, aktuální rozhodnutí skriptu a stav spotřebičů, log řízení, časová osa rozhodnutí za 24 h, výkony a fáze ze sítě, spotová cena a karta pro každý řízený spotřebič. Bojler, TČ i nabíječky jde odtud ovládat i ručně.
+
+> Senzory `sensor.solar_manager…` existují jen za běhu skriptu. Po restartu HA se objeví do 30 s. Když karta hlásí „Skript neběží“, zkontroluj doplněk AppDaemon.
+
 ---
 
 ## Nastavení, se kterými si můžeš hrát

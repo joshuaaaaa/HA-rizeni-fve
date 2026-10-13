@@ -23,6 +23,7 @@ CO VYPLNIT
 """
 
 import time
+from collections import deque
 import appdaemon.plugins.hass.hassapi as hass
 
 
@@ -159,6 +160,8 @@ VOLTAGE = 230
 class SolarManager(hass.Hass):
 
     def initialize(self):
+        self.history = deque(maxlen=20)   # posledních 20 řádků logu pro dashboard
+        self.info = {}
         self.c = CFG
         self.loads = [l for l in self.c["loads"] if l.get("enabled")]
         self.sent = {}   # poslední odeslané příkazy (proti opakování)
@@ -201,9 +204,56 @@ class SolarManager(hass.Hass):
 
     # ── Hlavní smyčka ────────────────────────────────────────────────
 
+    # ── Log a stav pro dashboard ─────────────────────────────────────
+
+    def log(self, msg, *args, **kwargs):
+        super().log(msg, *args, **kwargs)
+        if hasattr(self, "history") and not msg.startswith("cena "):
+            msg = msg.strip()
+            if self.history and self.history[0].endswith(msg):
+                return   # stejná hláška pořád dokola (např. chybí data) — neopakovat
+            self.history.appendleft(f"{time.strftime('%d.%m. %H:%M:%S')}  {msg}")
+
     def loop(self, kwargs):
+        self.info = {"stav": "chyba dat"}
+        try:
+            self.step()
+        finally:
+            self.publish()
+
+    def publish(self):
+        """Zapíše do HA senzory sensor.solar_manager a sensor.solar_manager_prebytek."""
+        loads = []
+        for l in self.loads:
+            s = self.st[l["id"]]
+            txt = "ZAP" if s["on"] else "vyp"
+            if s["on"] and self.adjustable(l):
+                txt += f" {s['amps']} A"
+            loads.append(f"{l['name']}: {txt}")
+        attrs = dict(self.info)
+        attrs.update({
+            "friendly_name": "Solar Manager",
+            "icon": "mdi:solar-power-variant",
+            "rezim": "NA SUCHO" if DRY_RUN else "OSTRÝ PROVOZ",
+            "spotrebice": loads,
+            "log": list(self.history),
+        })
+        try:
+            self.set_state("sensor.solar_manager", state=self.info.get("stav", "?"),
+                           attributes=attrs)
+            if "prebytek_w" in self.info:
+                self.set_state("sensor.solar_manager_prebytek", state=round(self.info["prebytek_w"]),
+                               attributes={"friendly_name": "Solar Manager přebytek",
+                                           "unit_of_measurement": "W",
+                                           "device_class": "power",
+                                           "state_class": "measurement"})
+        except Exception as e:
+            super().log(f"Nelze zapsat stav do HA: {e}", level="WARNING")
+
+    def step(self):
         master = self.c["master_switch"]
         if master and self.get_state(master) == "off":
+            self.info = {"stav": "pozastaveno"}
             if not self.paused:
                 self.log("Hlavní vypínač je vypnutý — neřídím nic")
                 self.paused = True
@@ -235,6 +285,11 @@ class SolarManager(hass.Hass):
         limit_a = self.c["fuse_limit_a"] - self.c["fuse_reserve_a"]
 
         band = self.band(price)
+        self.info = {
+            "stav": band, "cena": round(price, 2), "fve_w": round(pv), "sit_w": round(grid),
+            "baterie_soc": round(soc), "baterie_w": round(batt),
+            "faze_max_a": None if max_a is None else round(max_a, 1), "limit_a": limit_a,
+        }
         self.log(
             f"cena {price:.2f} Kč ({band}) | FVE {pv:.0f} W | síť {grid:+.0f} W | "
             f"baterie {soc:.0f} % {batt:+.0f} W | fáze max "
@@ -243,6 +298,7 @@ class SolarManager(hass.Hass):
 
         # 1) Ochrana jističe — má přednost před vším
         if phase_ok and max_a > limit_a:
+            self.info["stav"] = "jistič!"
             self.log(f"⚠ Fáze {max_a:.1f} A > {limit_a} A — odlehčuji", level="WARNING")
             self.shed(force=True)
             return
@@ -253,6 +309,7 @@ class SolarManager(hass.Hass):
         # 3) Spotřebiče
         free_a = (limit_a - max_a) if phase_ok else 0.0
         if band in ("záporná", "levná"):
+            self.info["prebytek_w"] = grid + batt
             self.cheap_mode(free_a, phase_ok)
         else:
             # Přebytek = co jde do sítě. Vybíjení baterie se počítá jako odběr,
@@ -260,6 +317,7 @@ class SolarManager(hass.Hass):
             surplus = grid + min(batt, 0.0)
             if soc >= self.c["battery_priority_soc"] and batt > 0:
                 surplus += batt   # nabíjení plné baterie můžeme přesměrovat do spotřebičů
+            self.info["prebytek_w"] = surplus
             self.solar_mode(surplus, free_a, phase_ok, band)
 
     def sync_states(self):

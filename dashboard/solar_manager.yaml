@@ -1,0 +1,307 @@
+# Dashboard „Řízení FVE“ pro Home Assistant
+# Vložení: Nastavení → Ovládací panely → Přidat ovládací panel → Nový od začátku
+#          → otevři ho → tužka (Upravit) → ⋮ → Editor nezpracované konfigurace
+#          → smaž obsah, vlož celý tento soubor, Uložit.
+# Používá jen vestavěné karty (nic z HACS).
+title: Řízení FVE
+views:
+  - title: Řízení
+    path: rizeni
+    icon: mdi:solar-power-variant
+    type: sections
+    max_columns: 3
+    sections:
+
+      # ── 1. Stav řízení ───────────────────────────────────────────
+      - type: grid
+        cards:
+          - type: heading
+            heading: Řízení
+            icon: mdi:robot
+          - type: tile
+            entity: input_boolean.solar_manager
+            name: Automatické řízení
+            icon: mdi:power
+            tap_action:
+              action: toggle
+            grid_options:
+              columns: full
+          - type: markdown
+            grid_options:
+              columns: full
+            content: |
+              {% set s = 'sensor.solar_manager' %}
+              {% set st = states(s) %}
+              {% if st in ['unknown', 'unavailable'] %}
+              ⚠️ **Skript neběží** – zkontroluj doplněk AppDaemon.
+              {% else %}
+              {% set ikony = {'záporná':'🟣','levná':'🟢','normální':'🟡','drahá':'🔴','jistič!':'⚡','pozastaveno':'⏸️','chyba dat':'⚠️'} %}
+              ## {{ ikony.get(st, '❔') }} {{ st | upper }}
+
+              **{{ state_attr(s, 'rezim') }}**
+              {%- if state_attr(s, 'rezim') == 'NA SUCHO' %} – nic se nespíná, jen se zkouší{% endif %}
+
+
+              | | |
+              |---|---|
+              | Spotová cena | **{{ state_attr(s, 'cena') }} Kč/kWh** |
+              | Přebytek pro spotřebiče | **{{ state_attr(s, 'prebytek_w') | int(0) }} W** |
+              | FVE | {{ state_attr(s, 'fve_w') }} W |
+              | Síť (+ přetok / − odběr) | {{ state_attr(s, 'sit_w') }} W |
+              | Baterie | {{ state_attr(s, 'baterie_soc') }} % · {{ state_attr(s, 'baterie_w') }} W |
+              | Nejvytíženější fáze | {{ state_attr(s, 'faze_max_a') }} A z {{ state_attr(s, 'limit_a') }} A |
+              {% endif %}
+          - type: markdown
+            grid_options:
+              columns: full
+            content: |
+              ### Spotřebiče podle priority
+
+              {% for r in state_attr('sensor.solar_manager', 'spotrebice') or [] %}
+              {{ loop.index }}. {{ '🟢' if ': ZAP' in r else '⚪' }} {{ r }}
+
+              {% endfor %}
+
+      # ── 2. Co se děje (log) ──────────────────────────────────────
+      - type: grid
+        cards:
+          - type: heading
+            heading: Log řízení
+            icon: mdi:text-box-outline
+          - type: markdown
+            grid_options:
+              columns: full
+            content: |
+              {% set log = state_attr('sensor.solar_manager', 'log') or [] %}
+              {% if log | count == 0 %}
+              _Zatím žádné akce. Skript zapisuje jen změny (zapnutí, vypnutí, proud)._
+              {% else %}
+              {% for r in log %}
+              `{{ r[:15] }}` {{ r[16:] }}
+
+              {% endfor %}
+              {% endif %}
+          - type: history-graph
+            title: Rozhodnutí skriptu
+            hours_to_show: 24
+            grid_options:
+              columns: full
+            entities:
+              - entity: sensor.solar_manager
+                name: Pásmo
+              - entity: switch.boiler_jistic
+                name: Bojler
+              - entity: select.sprsun_sg_ready_mode
+                name: TČ SG Ready
+              - entity: switch.nabijecka_doma_china
+                name: Nabíječka China
+
+      # ── 3. Energie ───────────────────────────────────────────────
+      - type: grid
+        cards:
+          - type: heading
+            heading: Energie
+            icon: mdi:flash
+          - type: tile
+            entity: sensor.solax_pv_power_total
+            name: Výroba FVE
+            icon: mdi:solar-power
+          - type: tile
+            entity: sensor.solax_house_load
+            name: Spotřeba domu
+            icon: mdi:home-lightning-bolt
+          - type: tile
+            entity: sensor.solax_measured_power
+            name: Síť (+ přetok)
+            icon: mdi:transmission-tower
+          - type: tile
+            entity: sensor.solar_manager_prebytek
+            name: Přebytek
+            icon: mdi:plus-circle
+          - type: gauge
+            entity: sensor.solax_battery_capacity
+            name: Baterie
+            min: 0
+            max: 100
+            severity:
+              red: 0
+              yellow: 30
+              green: 80
+          - type: tile
+            entity: sensor.solax_battery_power_charge
+            name: Baterie (+ nabíjí)
+            icon: mdi:battery-charging
+          - type: markdown
+            grid_options:
+              columns: full
+            content: |
+              **Fáze ze sítě** (jistič 25 A, odlehčuje se od 23 A)
+
+              {% for f in ['l1', 'l2', 'l3'] %}
+              {% set w = states('sensor.solax_measured_power_' ~ f) | float(0) %}
+              {% set a = (w | abs / 230) | round(1) %}
+              {{ f | upper }}: **{{ a }} A** {{ '🔴' if a > 23 else ('🟡' if a > 18 else '🟢') }} ({{ w | int }} W)
+
+              {% endfor %}
+          - type: history-graph
+            title: Výkony – 24 h
+            hours_to_show: 24
+            grid_options:
+              columns: full
+            entities:
+              - entity: sensor.solax_pv_power_total
+                name: FVE
+              - entity: sensor.solax_house_load
+                name: Dům
+              - entity: sensor.solax_measured_power
+                name: Síť
+              - entity: sensor.solax_battery_power_charge
+                name: Baterie
+              - entity: sensor.solar_manager_prebytek
+                name: Přebytek
+
+      # ── 4. Spotová cena ──────────────────────────────────────────
+      - type: grid
+        cards:
+          - type: heading
+            heading: Spotová cena
+            icon: mdi:cash
+          - type: gauge
+            entity: sensor.current_spot_electricity_price
+            name: Aktuální cena
+            unit: Kč/kWh
+            min: -1
+            max: 8
+            needle: true
+            segments:
+              - from: -1
+                color: "#8e44ad"
+              - from: 0
+                color: "#2ecc71"
+              - from: 1.5
+                color: "#f1c40f"
+              - from: 4.5
+                color: "#e74c3c"
+          - type: entities
+            entities:
+              - entity: sensor.spot_cheapest_electricity_today
+                name: Dnes nejlevnější
+              - entity: sensor.spot_most_expensive_electricity_today
+                name: Dnes nejdražší
+              - entity: sensor.spot_cheapest_electricity_tomorrow
+                name: Zítra nejlevnější
+              - entity: binary_sensor.spot_electricity_is_cheapest_2_hours_block
+                name: Teď nejlevnější 2 h
+              - entity: binary_sensor.spot_electricity_is_cheapest_4_hours_block
+                name: Teď nejlevnější 4 h
+          - type: history-graph
+            title: Cena – 48 h
+            hours_to_show: 48
+            grid_options:
+              columns: full
+            entities:
+              - entity: sensor.current_spot_electricity_price
+                name: Spot
+
+      # ── 5. Bojler ────────────────────────────────────────────────
+      - type: grid
+        cards:
+          - type: heading
+            heading: "1 · Bojler"
+            icon: mdi:water-boiler
+          - type: tile
+            entity: switch.boiler_jistic
+            name: Bojler
+            tap_action:
+              action: toggle
+          - type: tile
+            entity: sensor.boiler_jistic_vykon_2
+            name: Příkon
+          - type: tile
+            entity: sensor.daily_energy_bojler
+            name: Dnes
+          - type: tile
+            entity: sensor.monthly_energy_bojler
+            name: Tento měsíc
+
+      # ── 6. Tepelné čerpadlo ──────────────────────────────────────
+      - type: grid
+        cards:
+          - type: heading
+            heading: "2 · TČ SPRSUN"
+            icon: mdi:heat-pump
+          - type: tile
+            entity: select.sprsun_sg_ready_mode
+            name: SG Ready režim
+            features:
+              - type: select-options
+            grid_options:
+              columns: full
+          - type: tile
+            entity: switch.sprsun_sg_ready_function
+            name: SG Ready povoleno
+            tap_action:
+              action: toggle
+          - type: tile
+            entity: sensor.sprsun_status
+            name: Stav
+          - type: tile
+            entity: sensor.sprsun_power
+            name: Příkon
+          - type: tile
+            entity: sensor.sprsun_hot_water_temperature
+            name: Teplá voda
+          - type: tile
+            entity: sensor.sprsun_outlet_temperature
+            name: Výstup topení
+          - type: tile
+            entity: sensor.daily_energy_sprsun
+            name: Dnes
+
+      # ── 7. Nabíječka China ───────────────────────────────────────
+      - type: grid
+        cards:
+          - type: heading
+            heading: "3 · Nabíječka China"
+            icon: mdi:ev-station
+          - type: tile
+            entity: switch.nabijecka_doma_china
+            name: Nabíjení
+            tap_action:
+              action: toggle
+          - type: tile
+            entity: sensor.nabijecka_doma_china_status
+            name: Stav
+          - type: tile
+            entity: number.nabijecka_doma_china_max_current
+            name: Proud
+            features:
+              - type: numeric-input
+                style: buttons
+            grid_options:
+              columns: full
+          - type: tile
+            entity: sensor.nabijecka_doma_china_vykon
+            name: Výkon
+          - type: tile
+            entity: sensor.nabijecka_doma_china_energie
+            name: Energie
+
+      # ── 8. Wallbox Olife ─────────────────────────────────────────
+      - type: grid
+        cards:
+          - type: heading
+            heading: "4 · Wallbox Olife"
+            icon: mdi:ev-station
+          - type: tile
+            entity: sensor.current_limit_control
+            name: Nastavený proud (0 = stop)
+          - type: tile
+            entity: sensor.charging_power
+            name: Výkon
+          - type: tile
+            entity: sensor.ev_state
+            name: Stav auta
+          - type: tile
+            entity: sensor.actual_current_limit
+            name: Skutečný limit

@@ -47,6 +47,9 @@ class FakeHass:
         elif "temperature" in kw:
             self.states[e] = {"state": "heat", "temperature": kw["temperature"]}
 
+    def set_state(self, entity, state=None, attributes=None):
+        self.states[entity] = {"state": str(state), **(attributes or {})}
+
     def run_every(self, *a, **k):
         pass
 
@@ -233,6 +236,21 @@ class Tests(unittest.TestCase):
         app = self._all_on_but_olife(**{OLIFE.replace(".", "__"): "6", GRID: "3000"})
         app.loop({})
         self.assertGreater(float(app.states[OLIFE]), 6)
+
+    def test_dashboard_sensor_published(self):
+        app = make(**{GRID: "3000"})
+        app.loop({})
+        st = app.states["sensor.solar_manager"]
+        self.assertEqual(st["state"], "normální")
+        self.assertEqual(st["cena"], 3.0)
+        self.assertIn("Bojler: ZAP", st["spotrebice"])
+        self.assertTrue(any("ZAPÍNÁM Bojler" in r for r in st["log"]))
+        self.assertEqual(app.states["sensor.solar_manager_prebytek"]["state"], "3000")
+
+    def test_dashboard_sensor_on_missing_data(self):
+        app = make(**{GRID: "unavailable"})
+        app.loop({})
+        self.assertEqual(app.states["sensor.solar_manager"]["state"], "chyba dat")
 
     def test_dry_run_calls_nothing(self):
         sm.DRY_RUN = True
