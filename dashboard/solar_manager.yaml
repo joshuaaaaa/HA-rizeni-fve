@@ -55,12 +55,34 @@ views:
             grid_options:
               columns: full
             content: |
-              ### Spotřebiče podle priority
+              {%- set s = 'sensor.solar_manager' %}
+              {%- if states(s) in ['unknown', 'unavailable'] %}
+              ⚠️ **Skript neběží** – zkontroluj doplněk AppDaemon.
+              {%- else %}
+              ## 🔎 Co se právě děje
+              _Aktualizováno {{ state_attr(s, 'aktualizovano') }} · {{ state_attr(s, 'rezim') }}_
 
-              {% for r in state_attr('sensor.solar_manager', 'spotrebice') or [] %}
-              {{ loop.index }}. {{ '🟢' if ': ZAP' in r else '⚪' }} {{ r }}
+              **Rozhodnutí v posledním kroku:**
+              {%- for d in state_attr(s, 'duvody') or [] %}
+              - {{ d }}
+              {%- endfor %}
 
-              {% endfor %}
+              **Spotřebiče** (v pořadí priority):
+
+              | | Spotřebič | Stav | Od | Proč |
+              |---|---|---|---|---|
+              {%- for x in state_attr(s, 'spotrebice_detail') or [] %}
+              | {{ '🟢' if x.zapnuto else '⚪' }} | {{ x.nazev }} | {{ 'ZAP' if x.zapnuto else 'vyp' }}{{ (' ' ~ x.proud_a ~ ' A') if x.proud_a else '' }} | {{ x.od or '–' }} | {{ x.proc or '–' }} |
+              {%- endfor %}
+
+              **Poslední změny:**
+              {%- set log = state_attr(s, 'log') or [] %}
+              {%- for r in log[:8] %}
+              - `{{ r[:15] }}` {{ r[16:] }}
+              {%- else %}
+              - _zatím nic_
+              {%- endfor %}
+              {%- endif %}
 
       # ── 2. Co se děje (log) ──────────────────────────────────────
       - type: grid

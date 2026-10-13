@@ -262,6 +262,32 @@ class Tests(unittest.TestCase):
         app = make(**{GRID: "unavailable"})
         app.loop({})
         self.assertEqual(app.states["sensor.solar_manager"]["state"], "chyba dat")
+        # přebytek musí existovat vždy, i když chybí data
+        self.assertEqual(app.states["sensor.solar_manager_prebytek"]["state"], "unknown")
+        self.assertIn("výkon sítě", " ".join(app.states["sensor.solar_manager"]["duvody"]))
+
+    def test_reasons_explain_decision(self):
+        app = make(**{GRID: "3000"})
+        app.loop({})
+        d = app.states["sensor.solar_manager"]
+        self.assertTrue(any("zapínám Bojler" in r for r in d["duvody"]), d["duvody"])
+        boiler = d["spotrebice_detail"][0]
+        self.assertTrue(boiler["zapnuto"])
+        self.assertIn("přebytek", boiler["proc"])
+
+    def test_reasons_not_enough_surplus(self):
+        app = make(**{GRID: "500"})
+        app.loop({})
+        d = app.states["sensor.solar_manager"]["duvody"]
+        self.assertTrue(any("nestačí" in r and "Bojler" in r for r in d), d)
+
+    def test_reasons_min_on_time(self):
+        app = make(**{GRID: "3000"})
+        app.loop({})
+        app.states[GRID.replace("__", ".")] = "-2000"
+        app.loop({})
+        d = app.states["sensor.solar_manager"]["duvody"]
+        self.assertTrue(any("musí ještě běžet" in r for r in d), d)
 
     def test_dry_run_calls_nothing(self):
         sm.DRY_RUN = True
