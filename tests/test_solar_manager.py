@@ -58,9 +58,16 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "apps"))
 import solar_manager as sm  # noqa: E402
 
 sm.DRY_RUN = False
+sm.CFG["battery_control"] = True
 for l in sm.CFG["loads"]:
-    l["enabled"] = True
-EV1 = sm.CFG["loads"][1]
+    l["enabled"] = l["id"] != "ev_olife"
+
+BOILER = "switch.boiler_jistic"
+HP = "select.sprsun_sg_ready_mode"
+EV_SW = "switch.nabijecka_doma_china"
+EV_A = "number.nabijecka_doma_china_max_current"
+MODE = "select.solax_charger_use_mode"
+EXPORT = "number.solax_export_control_user_limit"
 
 
 def make(**over):
@@ -71,15 +78,17 @@ def make(**over):
         "sensor.solax_battery_capacity": "50",
         "sensor.solax_battery_power_charge": "0",
         "sensor.solax_measured_power": "0",
-        "sensor.solax_current_l1": "5", "sensor.solax_current_l2": "5", "sensor.solax_current_l3": "5",
-        "select.solax_charger_use_mode": "Self Use Mode",
-        "number.solax_export_control_user_limit": "10000",
-        "switch.bojler": "off",
-        "switch.wallbox1_charging": "off", "number.wallbox1_max_current": "6",
-        "switch.wallbox2": "off",
-        "climate.tepelne_cerpadlo": {"state": "heat", "temperature": 21.0},
+        "sensor.solax_measured_power_l1": "-1150",   # 5 A
+        "sensor.solax_measured_power_l2": "-1150",
+        "sensor.solax_measured_power_l3": "-1150",
+        MODE: "Self Use Mode",
+        "select.solax_manual_mode_select": "Stop Charge and Discharge",
+        EXPORT: "15000",
+        BOILER: "off",
+        HP: "Normal",
+        EV_SW: "off", EV_A: "6",
     }
-    st.update(over)
+    st.update({k.replace("__", "."): v for k, v in over.items()})
     app = sm.SolarManager.__new__(sm.SolarManager)
     FakeHass.__init__(app, st)
     app.initialize()
@@ -90,11 +99,21 @@ def services(app):
     return [(s, kw.get("entity_id")) for s, kw in app.calls]
 
 
+GRID = "sensor__solax_measured_power"
+SOC = "sensor__solax_battery_capacity"
+BATT = "sensor__solax_battery_power_charge"
+PRICE = "sensor__current_spot_electricity_price"
+
+
 class Tests(unittest.TestCase):
+    def test_no_unknown_entities(self):
+        app = make()
+        self.assertFalse([m for m in app.logs if "neexistuje" in m and "olife" not in m], app.logs)
+
     def test_surplus_turns_on_boiler(self):
-        app = make(**{"sensor.solax_measured_power": "3000", "sensor.solax_pv_power_total": "5000"})
+        app = make(**{GRID: "3000"})
         app.loop({})
-        self.assertIn(("homeassistant/turn_on", "switch.bojler"), services(app))
+        self.assertIn(("homeassistant/turn_on", BOILER), services(app))
 
     def test_no_surplus_nothing(self):
         app = make()
@@ -102,83 +121,91 @@ class Tests(unittest.TestCase):
         self.assertEqual(app.calls, [])
 
     def test_battery_discharge_sheds_load(self):
-        # Bojler běží, síť 0, ale baterie vybíjí 2 kW → bojler musí vypnout
-        app = make(**{"switch.bojler": "on", "sensor.solax_battery_power_charge": "-2000"})
+        app = make(**{"switch__boiler_jistic": "on", BATT: "-2000"})
         app.loop({})
-        self.assertIn(("homeassistant/turn_off", "switch.bojler"), services(app))
+        self.assertIn(("homeassistant/turn_off", BOILER), services(app))
 
     def test_full_battery_charge_counts_as_surplus(self):
-        app = make(**{"sensor.solax_battery_capacity": "90",
-                      "sensor.solax_battery_power_charge": "2500"})
+        app = make(**{SOC: "90", BATT: "2800"})
         app.loop({})
-        self.assertIn(("homeassistant/turn_on", "switch.bojler"), services(app))
+        self.assertIn(("homeassistant/turn_on", BOILER), services(app))
 
     def test_low_battery_charge_has_priority(self):
-        app = make(**{"sensor.solax_battery_capacity": "40",
-                      "sensor.solax_battery_power_charge": "2500"})
+        app = make(**{SOC: "40", BATT: "2800"})
         app.loop({})
-        self.assertNotIn(("homeassistant/turn_on", "switch.bojler"), services(app))
+        self.assertNotIn(("homeassistant/turn_on", BOILER), services(app))
 
-    def test_fuse_protection(self):
-        app = make(**{"switch.bojler": "on", "sensor.solax_current_l1": "31"})
+    def test_second_load_is_heat_pump_sg(self):
+        app = make(**{"switch__boiler_jistic": "on", GRID: "3000"})
         app.loop({})
-        # vypíná se nejméně důležitý zapnutý spotřebič = bojler (jediný zapnutý)
-        self.assertIn(("homeassistant/turn_off", "switch.bojler"), services(app))
+        self.assertIn(("select/select_option", HP), services(app))
+        self.assertEqual(app.states[HP], "SG+")
+
+    def test_fuse_protection_from_phase_power(self):
+        # 7130 W na L1 = 31 A > 30 A
+        app = make(**{"switch__boiler_jistic": "on", "sensor__solax_measured_power_l1": "-7130"})
+        app.loop({})
+        self.assertIn(("homeassistant/turn_off", BOILER), services(app))
 
     def test_cheap_grid_charge_and_boiler(self):
-        app = make(**{"sensor.current_spot_electricity_price": "1.0"})
+        app = make(**{PRICE: "1.0"})
         app.loop({})
         s = services(app)
-        self.assertIn(("select/select_option", "select.solax_charger_use_mode"), s)
-        self.assertIn(("homeassistant/turn_on", "switch.bojler"), s)
+        self.assertEqual(app.states[MODE], "Manual Mode")
+        self.assertEqual(app.states["select.solax_manual_mode_select"], "Force Charge")
+        self.assertIn(("homeassistant/turn_on", BOILER), s)
+
+    def test_battery_control_off_leaves_inverter(self):
+        sm.CFG["battery_control"] = False
+        try:
+            app = make(**{PRICE: "-1.0"})
+            app.loop({})
+            self.assertNotIn(MODE, [e for _, e in services(app)])
+            self.assertNotIn(EXPORT, [e for _, e in services(app)])
+        finally:
+            sm.CFG["battery_control"] = True
 
     def test_negative_price_export_zero(self):
-        app = make(**{"sensor.current_spot_electricity_price": "-0.5"})
+        app = make(**{PRICE: "-0.5"})
         app.loop({})
-        self.assertIn(("number/set_value", "number.solax_export_control_user_limit"), services(app))
-        self.assertEqual(app.states["number.solax_export_control_user_limit"], "0.0")
+        self.assertEqual(app.states[EXPORT], "0.0")
 
     def test_manual_change_restored(self):
-        app = make(**{"sensor.current_spot_electricity_price": "1.0"})
+        app = make(**{PRICE: "1.0"})
         app.loop({})
-        app.states["select.solax_charger_use_mode"] = "Self Use Mode"  # někdo přepnul ručně
+        app.states[MODE] = "Self Use Mode"  # někdo přepnul ručně
         app.calls.clear()
         app.sent.clear()
         app.loop({})
-        self.assertIn(("select/select_option", "select.solax_charger_use_mode"), services(app))
+        self.assertIn(("select/select_option", MODE), services(app))
 
     def test_no_repeat_calls(self):
-        app = make(**{"sensor.current_spot_electricity_price": "1.0"})
+        app = make(**{PRICE: "1.0"})
         app.loop({})
-        n = len(app.calls)
         app.loop({})
-        # druhý krok může přidat další spotřebič, ale nesmí opakovat stejné příkazy
         self.assertEqual(len(set(map(str, app.calls))), len(app.calls))
-        self.assertGreaterEqual(len(app.calls), n)
 
     def test_master_switch_off(self):
-        app = make(**{"input_boolean.solar_manager": "off",
-                      "sensor.solax_measured_power": "5000"})
+        app = make(**{"input_boolean__solar_manager": "off", GRID: "5000"})
         app.loop({})
         self.assertEqual(app.calls, [])
 
     def test_missing_data_skips(self):
-        app = make(**{"sensor.solax_measured_power": "unavailable"})
+        app = make(**{GRID: "unavailable"})
         app.loop({})
         self.assertEqual(app.calls, [])
 
     def test_ev_ramps_down_on_import(self):
-        app = make(**{"switch.bojler": "on", "switch.wallbox1_charging": "on",
-                      "number.wallbox1_max_current": "12",
-                      "sensor.solax_measured_power": "-1500"})
+        app = make(**{"switch__boiler_jistic": "on", HP.replace(".", "__"): "SG+",
+                      EV_SW.replace(".", "__"): "on", EV_A.replace(".", "__"): "12",
+                      GRID: "-1500"})
         app.loop({})
-        self.assertIn(("number/set_value", "number.wallbox1_max_current"), services(app))
-        self.assertLess(float(app.states["number.wallbox1_max_current"]), 12)
+        self.assertLess(float(app.states[EV_A]), 12)
 
     def test_dry_run_calls_nothing(self):
         sm.DRY_RUN = True
         try:
-            app = make(**{"sensor.current_spot_electricity_price": "1.0"})
+            app = make(**{PRICE: "1.0"})
             app.loop({})
             self.assertEqual(app.calls, [])
             self.assertTrue(any("NA SUCHO" in m for m in app.logs))
@@ -187,7 +214,7 @@ class Tests(unittest.TestCase):
 
     def test_manual_switch_on_detected(self):
         app = make()
-        app.states["switch.bojler"] = "on"
+        app.states[BOILER] = "on"
         app.loop({})
         self.assertTrue(app.st["boiler"]["on"])
 

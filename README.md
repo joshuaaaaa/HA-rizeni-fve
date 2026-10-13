@@ -58,8 +58,25 @@ Tipy:
 * **Wallbox**: když jde proud jen přepínat ze seznamu (Tuya to tak často má), je to entita `select.…` – skript to umí. Když jde jen zapnout/vypnout, dej `"current": None`.
 * **Fáze** (`"phases"`): bojler bývá na 1 fázi, wallbox a TČ na 3. Hodnota se používá pro hlídání jističe.
 * **TČ** se řídí přes `climate` entitu: při přebytku/levné ceně zvedne požadovanou teplotu o `boost` °C, jinak vrátí `base_temp`. Pokud tvoje integrace TČ nemá `climate`, ale třeba `switch` (např. SG Ready), změň `type` na `"switch"`.
-* **Režimy SolaXu**: texty v `mode_normal` a `mode_grid_charge` musí přesně odpovídat volbám v `select.…charger_use_mode` (rozklikni entitu a podívej se). Režim *Force Time Use* nabíjí ze sítě jen v časech nastavených ve střídači (`charger start/end time`) – nastav je na celý den a povol nabíjení ze sítě (`grid charge`).
-* **Minimální SOC baterie** nastav přímo ve střídači (Self Use min SOC) – skript ho nepřepisuje.
+* **Řízení baterie** je ve výchozím stavu vypnuté (`"battery_control": False`), protože na baterii máš vlastní automatizace. Nabíjení ze sítě se dělá přepnutím `select.solax_charger_use_mode` na *Manual Mode* a `select.solax_manual_mode_select` na *Force Charge* (seznam `grid_charge_selects`). Než ho zapneš, vyzkoušej to ručně v HA a ověř, že baterie opravdu nabíjí ze sítě.
+* **Minimální SOC baterie** nastav přímo ve střídači (Selfuse Discharge Min SOC). Skript ho nepřepisuje.
+
+### 4b. Tvoje instalace – co je už nastavené
+
+| Co | Entita | Poznámka |
+|---|---|---|
+| Spotová cena | `sensor.current_spot_electricity_price` | Kč/kWh |
+| FVE / baterie / síť | `sensor.solax_pv_power_total`, `…battery_capacity`, `…battery_power_charge`, `…measured_power` | znaménka ověřena, invert není potřeba |
+| Hlídání jističe | `sensor.solax_measured_power_l1..l3` | proud se dopočítá z výkonu fází (W ÷ 230) |
+| Bojler | `switch.boiler_jistic` | ~2,4 kW, 1 fáze |
+| TČ SPRSUN | `select.sprsun_sg_ready_mode` | SG+ při přebytku nebo levné ceně, jinak Normal. **Musí být zapnutý `switch.sprsun_sg_ready_function`.** |
+| Wallbox China (Tuya) | `switch.nabijecka_doma_china` + `number.nabijecka_doma_china_max_current` | ověř počet fází |
+| Wallbox Olife (Modbus) | **doplnit** | zatím vypnutý |
+
+**Automatizace, které se se skriptem perou.** Před ostrým provozem je vypni (Nastavení → Automatizace), jinak budou dvě věci ovládat totéž:
+
+* pro wallbox China: `EV Charging – Enhanced Dynamic Control`, `EV Charging – Morning Reset / Night Stop`, `Spuštění nabíjení`, `Start/Stop nabíjení …` a `Ukončení nabíjení`, pokud ovládají tuto nabíječku,
+* pro baterii (jen když zapneš `battery_control`): `Solax – řízení podle spot ceny`, `Nabíjení baterie start/stop`, `Vybíjení baterie do sítě podle spotu START/STOP`, `Sync … export limit` a `Nastavení doby trvání režimu Solax`.
 
 ### 5. Kontrola znamének (důležité!)
 Skript počítá s tím, že:

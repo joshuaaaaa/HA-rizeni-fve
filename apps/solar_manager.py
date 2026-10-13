@@ -35,12 +35,12 @@ DRY_RUN = True   # True = jen loguje, False = opravdu spíná
 CFG = {
     # ── Hlavní vypínač (volitelný) ───────────────────────────────────
     # input_boolean v HA; když je vypnutý, skript nic neřídí.
-    # Vytvoř ho v Nastavení → Zařízení a služby → Pomocníci → Přepínač.
-    # Nech prázdné "", pokud ho nechceš.
-    "master_switch":    "input_boolean.solar_manager",       # ZMĚŇ nebo ""
+    # Vytvoř ho v Nastavení → Zařízení a služby → Pomocníci → Přepínač,
+    # název „solar_manager“. Nech prázdné "", pokud ho nechceš.
+    "master_switch":    "input_boolean.solar_manager",
 
     # ── Spotová cena (integrace „Spotové ceny energií v Česku“) ──────
-    "spot_price":       "sensor.current_spot_electricity_price",  # ZMĚŇ podle svého HA
+    "spot_price":       "sensor.current_spot_electricity_price",   # Kč/kWh
     "price_unit":       "czk_kwh",   # "czk_kwh" nebo "eur_mwh"
     "eur_czk_rate":     25.0,        # jen pro eur_mwh
 
@@ -50,36 +50,48 @@ CFG = {
     "price_expensive":  4.5,   # nad tím = drahá
 
     # ── SolaX (integrace solax_modbus) ───────────────────────────────
-    "pv_power":         "sensor.solax_pv_power_total",       # ZMĚŇ  výroba FVE [W]
-    "battery_soc":      "sensor.solax_battery_capacity",     # ZMĚŇ  SOC [%]
-    "battery_power":    "sensor.solax_battery_power_charge", # ZMĚŇ  [W] + nabíjí / − vybíjí
-    "grid_power":       "sensor.solax_measured_power",       # ZMĚŇ  [W] + export / − odběr ze sítě
-    # Pokud tvůj senzor ukazuje znaménka obráceně (viz README, „Kontrola znamének“),
-    # přepni na True:
+    "pv_power":         "sensor.solax_pv_power_total",        # výroba FVE [W]
+    "battery_soc":      "sensor.solax_battery_capacity",      # SOC [%]
+    "battery_power":    "sensor.solax_battery_power_charge",  # [W] + nabíjí / − vybíjí
+    "grid_power":       "sensor.solax_measured_power",        # [W] + export / − odběr ze sítě
+    # Znaménka ověřena z tvého výpisu (export 2378 W = +2378, baterie nabíjí = +976)
     "battery_invert":   False,
     "grid_invert":      False,
-    "phase_currents": [                                      # ZMĚŇ  proudy fází ze SÍTĚ [A]
-        "sensor.solax_current_l1",
-        "sensor.solax_current_l2",
-        "sensor.solax_current_l3",
+    # Výkon na jednotlivých fázích ze sítě [W] — z nich se počítá proud přes hlavní jistič.
+    # (SolaX nemá proudy ze sítě, jen proudy střídače, ty pro jistič nejsou použitelné.)
+    "phase_powers": [
+        "sensor.solax_measured_power_l1",
+        "sensor.solax_measured_power_l2",
+        "sensor.solax_measured_power_l3",
     ],
+    "phase_currents":   [],   # alternativa: senzory proudu fází ze sítě [A]
 
-    # Ovládání střídače (nech prázdné "", pokud zatím nechceš baterii řídit)
-    "work_mode_select": "select.solax_charger_use_mode",     # ZMĚŇ
-    "mode_normal":      "Self Use Mode",                     # ZMĚŇ přesný text volby
-    "mode_grid_charge": "Force Time Use",                    # ZMĚŇ přesný text volby
-    "export_limit":     "number.solax_export_control_user_limit",  # ZMĚŇ [W]
-    "export_limit_max": 10000,   # ZMĚŇ běžný limit přetoků [W]
+    # ── Řízení baterie ───────────────────────────────────────────────
+    # False = skript baterii a přetoky NEŘÍDÍ (máš na to vlastní automatizace).
+    # Zapni až po vypnutí automatizací „Solax – řízení podle spot ceny“,
+    # „Nabíjení baterie start/stop“, „Vybíjení baterie do sítě…“, „Sync … export limit“.
+    "battery_control":  False,
+    # Co nastavit v normálním režimu (pořadí = pořadí odeslání)
+    "normal_selects": [
+        ("select.solax_charger_use_mode", "Self Use Mode"),
+    ],
+    # Co nastavit pro nabíjení ze sítě
+    "grid_charge_selects": [
+        ("select.solax_manual_mode_select", "Force Charge"),
+        ("select.solax_charger_use_mode", "Manual Mode"),
+    ],
+    "export_limit":     "number.solax_export_control_user_limit",  # [W]
+    "export_limit_max": 15000,   # běžný limit přetoků [W] (number.solax_config_max_export)
 
-    # ── Baterie (20 kWh) ─────────────────────────────────────────────
-    "battery_capacity_kwh":   20,
-    "battery_soc_min":        20,    # jen informace — minimální SOC nastav přímo ve střídači
+    # ── Baterie (23 kWh dle BMS) ─────────────────────────────────────
+    "battery_capacity_kwh":   23,
+    "battery_soc_min":        30,    # jen informace — nastaveno ve střídači (Selfuse Discharge Min SOC)
     "grid_charge_enabled":    True,  # nabíjet ze sítě v levných hodinách
     "grid_charge_max_soc":    90,    # do kolika % nabíjet ze sítě
     "battery_priority_soc":   80,    # pod tím má baterie přednost před spotřebiči
 
     # ── Hlavní jistič ────────────────────────────────────────────────
-    "fuse_limit_a":     32,
+    "fuse_limit_a":     32,    # ZMĚŇ podle svého hlavního jističe
     "fuse_reserve_a":   2,
 
     # ── Chování smyčky ───────────────────────────────────────────────
@@ -92,37 +104,41 @@ CFG = {
     # type:
     #   "switch"        — obyčejné relé / zásuvka (bojler)
     #   "ev"            — wallbox; "current" = number/select entita proudu, nebo None (jen zap/vyp)
-    #   "climate_boost" — TČ přes climate entitu: v levné době / při přebytku
-    #                     zvedne teplotu o "boost" °C, jinak vrátí "base_temp"
+    #   "select_mode"   — přepnutí volby v select entitě (TČ přes SG Ready):
+    #                     zapnuto = "on_option", vypnuto = "off_option"
+    #   "climate_boost" — TČ přes climate entitu: zvedne teplotu o "boost" °C
     # cheap: True = v levných a záporných hodinách zapnout i ze sítě
-    # phases: 1 nebo 3 — kolik fází spotřebič zatěžuje (bojler bývá 1)
+    # phases: 1 nebo 3 — kolik fází spotřebič zatěžuje
     "loads": [
         {
             "id": "boiler", "name": "Bojler", "type": "switch",
-            "entity": "switch.bojler",                       # ZMĚŇ
-            "power_w": 2000, "phases": 1,
+            "entity": "switch.boiler_jistic",        # Tuya jistič, ~2,4 kW na 1 fázi
+            "power_w": 2400, "phases": 1,
             "cheap": True, "enabled": True,
         },
         {
-            "id": "ev1", "name": "Wallbox 1 (Modbus)", "type": "ev",
-            "switch": "switch.wallbox1_charging",            # ZMĚŇ
-            "current": "number.wallbox1_max_current",        # ZMĚŇ (nebo None)
-            "min_a": 6, "max_a": 16, "phases": 3,            # ZMĚŇ fáze 1 nebo 3
-            "cheap": True, "enabled": False,                 # zapni, až vyplníš
+            # SPRSUN přes SG Ready: SG+ zvedne žádanou teplotu topení (+4 °C)
+            # a nádrže (+2 °C), Normal vrátí zpět. Vyžaduje zapnutý
+            # switch.sprsun_sg_ready_function (zapni ručně v HA).
+            "id": "hp", "name": "TČ SPRSUN (SG Ready)", "type": "select_mode",
+            "entity": "select.sprsun_sg_ready_mode",
+            "on_option": "SG+", "off_option": "Normal",
+            "power_w": 2500, "phases": 3,
+            "cheap": True, "enabled": True,
         },
         {
-            "id": "ev2", "name": "Wallbox 2 (Tuya)", "type": "ev",
-            "switch": "switch.wallbox2",                     # ZMĚŇ
-            "current": None,                                 # ZMĚŇ pokud jde nastavit proud
+            "id": "ev_china", "name": "Nabíječka doma China (Tuya)", "type": "ev",
+            "switch": "switch.nabijecka_doma_china",
+            "current": "number.nabijecka_doma_china_max_current",
+            "min_a": 6, "max_a": 16, "phases": 3,    # ZMĚŇ fáze, pokud je 1fázová
+            "cheap": True, "enabled": True,
+        },
+        {
+            "id": "ev_olife", "name": "Wallbox Olife (Modbus)", "type": "ev",
+            "switch": "switch.olife_DOPLNIT",                # ZMĚŇ
+            "current": "number.olife_DOPLNIT",               # ZMĚŇ (nebo None)
             "min_a": 6, "max_a": 16, "phases": 3,
-            "cheap": True, "enabled": False,
-        },
-        {
-            "id": "hp", "name": "Tepelné čerpadlo", "type": "climate_boost",
-            "entity": "climate.tepelne_cerpadlo",            # ZMĚŇ
-            "base_temp": 21.0, "boost": 1.5,
-            "power_w": 3000, "phases": 3,
-            "cheap": True, "enabled": False,
+            "cheap": True, "enabled": False,                 # zapni, až vyplníš
         },
     ],
 }
@@ -162,15 +178,17 @@ class SolarManager(hass.Hass):
         """Při startu upozorní na entity, které v HA neexistují (překlep v názvu)."""
         ents = [self.c["spot_price"], self.c["pv_power"], self.c["battery_soc"],
                 self.c["battery_power"], self.c["grid_power"], self.c["master_switch"],
-                self.c["work_mode_select"], self.c["export_limit"],
-                *self.c["phase_currents"]]
+                self.c["export_limit"] if self.c["battery_control"] else "",
+                *self.c["phase_currents"], *self.c["phase_powers"]]
+        if self.c["battery_control"]:
+            ents += [e for e, _ in self.c["normal_selects"] + self.c["grid_charge_selects"]]
         for l in self.loads:
             ents += [l.get("entity"), l.get("switch"), l.get("current")]
         for e in ents:
             if e and not self.entity_exists(e):
                 self.log(f"✗ Entita {e} v HA neexistuje — zkontroluj název v konfiguraci",
                          level="WARNING")
-        if not self.c["phase_currents"]:
+        if not self.c["phase_currents"] and not self.c["phase_powers"]:
             self.log("Nejsou zadané proudy fází — spotřebiče se nebudou zapínat "
                      "(nelze hlídat jistič)", level="WARNING")
 
@@ -204,7 +222,7 @@ class SolarManager(hass.Hass):
 
         self.sync_states()
 
-        currents = [self.num(e) for e in self.c["phase_currents"]]
+        currents = self.phase_amps()
         phase_ok = bool(currents) and all(a is not None for a in currents)
         max_a = max(abs(a) for a in currents) if phase_ok else None
         limit_a = self.c["fuse_limit_a"] - self.c["fuse_reserve_a"]
@@ -249,11 +267,25 @@ class SolarManager(hass.Hass):
                 s["on"] = real
                 s["t"] = time.time()
 
+    def phase_amps(self):
+        """Proudy fází přes hlavní jistič [A] — ze senzorů proudu, nebo z výkonu fází."""
+        if self.c["phase_currents"]:
+            return [self.num(e) for e in self.c["phase_currents"]]
+        out = []
+        for e in self.c["phase_powers"]:
+            w = self.num(e)
+            out.append(None if w is None else abs(w) / VOLTAGE)
+        return out
+
     def real_on(self, l):
         ent = l.get("switch") if l["type"] == "ev" else l.get("entity")
         if l["type"] == "climate_boost" or not ent:
             return None
         state = self.get_state(ent)
+        if l["type"] == "select_mode":
+            if state == l["on_option"]:
+                return True
+            return False if state == l["off_option"] else None
         if state in ("on", "off"):
             return state == "on"
         return None
@@ -272,25 +304,26 @@ class SolarManager(hass.Hass):
     # ── Baterie ──────────────────────────────────────────────────────
 
     def battery(self, band, soc):
+        if not self.c["battery_control"]:
+            return
         if band == "záporná":
             # Nevyvážet (za export bychom platili), baterii nabíjet ze sítě
             self.set_export(0)
             if soc < self.c["grid_charge_max_soc"]:
-                self.set_mode(self.c["mode_grid_charge"])
+                self.set_mode(self.c["grid_charge_selects"])
             else:
-                self.set_mode(self.c["mode_normal"])
+                self.set_mode(self.c["normal_selects"])
         elif (band == "levná" and self.c["grid_charge_enabled"]
               and soc < self.c["grid_charge_max_soc"]):
             self.set_export(self.c["export_limit_max"])
-            self.set_mode(self.c["mode_grid_charge"])
+            self.set_mode(self.c["grid_charge_selects"])
         else:
             # Normální a drahá: baterie kryje spotřebu domu (Self Use)
             self.set_export(self.c["export_limit_max"])
-            self.set_mode(self.c["mode_normal"])
+            self.set_mode(self.c["normal_selects"])
 
-    def set_mode(self, option):
-        ent = self.c["work_mode_select"]
-        if ent and option:
+    def set_mode(self, selects):
+        for ent, option in selects:
             self.send(ent, option, "select/select_option", entity_id=ent, option=option)
 
     def set_export(self, watts):
@@ -378,6 +411,9 @@ class SolarManager(hass.Hass):
             self.switch(l["entity"], on)
         elif l["type"] == "ev":
             self.switch(l["switch"], on)
+        elif l["type"] == "select_mode":
+            opt = l["on_option"] if on else l["off_option"]
+            self.send(l["entity"], opt, "select/select_option", entity_id=l["entity"], option=opt)
         elif l["type"] == "climate_boost":
             temp = l["base_temp"] + (l["boost"] if on else 0)
             self.send(l["entity"], temp, "climate/set_temperature",
