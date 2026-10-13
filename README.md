@@ -71,12 +71,25 @@ Tipy:
 | Bojler | `switch.boiler_jistic` | ~2,4 kW, 1 fáze |
 | TČ SPRSUN | `select.sprsun_sg_ready_mode` | SG+ při přebytku nebo levné ceně, jinak Normal. **Musí být zapnutý `switch.sprsun_sg_ready_function`.** |
 | Wallbox China (Tuya) | `switch.nabijecka_doma_china` + `number.nabijecka_doma_china_max_current` | ověř počet fází |
-| Wallbox Olife (Modbus) | **doplnit** | zatím vypnutý |
+| Wallbox Olife (Modbus) | zápis do registru 2106 (hub `olife_energy`), zpětně `sensor.current_limit_control` | 0 A = nenabíjí, 6–16 A = nabíjí. Žádný vypínač nemá. |
 
 **Automatizace, které se se skriptem perou.** Před ostrým provozem je vypni (Nastavení → Automatizace), jinak budou dvě věci ovládat totéž:
 
-* pro wallbox China: `EV Charging – Enhanced Dynamic Control`, `EV Charging – Morning Reset / Night Stop`, `Spuštění nabíjení`, `Start/Stop nabíjení …` a `Ukončení nabíjení`, pokud ovládají tuto nabíječku,
+* pro oba wallboxy: `EV Charging – Enhanced Dynamic Control`, `EV Charging – Morning Reset / Night Stop`, `Spuštění nabíjení`, `Start/Stop nabíjení …` a `Ukončení nabíjení`, pokud ovládají tuto nabíječku,
 * pro baterii (jen když zapneš `battery_control`): `Solax – řízení podle spot ceny`, `Nabíjení baterie start/stop`, `Vybíjení baterie do sítě podle spotu START/STOP`, `Sync … export limit` a `Nastavení doby trvání režimu Solax`.
+
+**Olife – ověření ručně (jednou, před ostrým provozem):** v **Nástroje pro vývojáře → Akce** spusť
+
+```yaml
+action: modbus.write_register
+data:
+  hub: olife_energy
+  slave: 0
+  address: 2106
+  value: 8
+```
+
+Do 15 s by měl `sensor.current_limit_control` ukázat 8. S připojeným autem by mělo začít nabíjet a `sensor.charging_power` by měl ukázat zhruba 5,5 kW při 3 fázích. Potom pošli `value: 0`, nabíjení by se mělo zastavit. Když HA hlásí chybu u `slave`, přepiš ho na `device_address` (novější HA). Stejně pak uprav i řádek `slave=` ve skriptu.
 
 ### 5. Kontrola znamének (důležité!)
 Skript počítá s tím, že:

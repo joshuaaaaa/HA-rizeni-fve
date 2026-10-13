@@ -31,6 +31,10 @@ class FakeHass:
 
     def call_service(self, service, **kw):
         self.calls.append((service, kw))
+        if service == "modbus/write_register":
+            # Olife: registr 2106 se zpětně čte senzorem Current Limit Control
+            self.states[OLIFE] = str(kw["value"])
+            return
         e = kw["entity_id"]
         if service.endswith("turn_on"):
             self.states[e] = "on"
@@ -50,6 +54,7 @@ class FakeHass:
         self.logs.append(msg)
 
 
+OLIFE = "sensor.current_limit_control"
 hassapi.Hass = FakeHass
 sys.modules.update({"appdaemon": pkg, "appdaemon.plugins": plugins,
                     "appdaemon.plugins.hass": hassmod,
@@ -60,7 +65,7 @@ import solar_manager as sm  # noqa: E402
 sm.DRY_RUN = False
 sm.CFG["battery_control"] = True
 for l in sm.CFG["loads"]:
-    l["enabled"] = l["id"] != "ev_olife"
+    l["enabled"] = True
 
 BOILER = "switch.boiler_jistic"
 HP = "select.sprsun_sg_ready_mode"
@@ -87,6 +92,7 @@ def make(**over):
         BOILER: "off",
         HP: "Normal",
         EV_SW: "off", EV_A: "6",
+        OLIFE: "0",
     }
     st.update({k.replace("__", "."): v for k, v in over.items()})
     app = sm.SolarManager.__new__(sm.SolarManager)
@@ -108,7 +114,7 @@ PRICE = "sensor__current_spot_electricity_price"
 class Tests(unittest.TestCase):
     def test_no_unknown_entities(self):
         app = make()
-        self.assertFalse([m for m in app.logs if "neexistuje" in m and "olife" not in m], app.logs)
+        self.assertFalse([m for m in app.logs if "neexistuje" in m], app.logs)
 
     def test_surplus_turns_on_boiler(self):
         app = make(**{GRID: "3000"})
@@ -201,6 +207,32 @@ class Tests(unittest.TestCase):
                       GRID: "-1500"})
         app.loop({})
         self.assertLess(float(app.states[EV_A]), 12)
+
+    def _all_on_but_olife(self, **over):
+        st = {"switch__boiler_jistic": "on", HP.replace(".", "__"): "SG+",
+              EV_SW.replace(".", "__"): "on", EV_A.replace(".", "__"): "16"}
+        st.update(over)
+        return make(**st)
+
+    def test_olife_starts_via_modbus(self):
+        app = self._all_on_but_olife(**{GRID: "5000"})
+        app.loop({})
+        writes = [kw for s, kw in app.calls if s == "modbus/write_register"]
+        self.assertEqual(writes, [{"hub": "olife_energy", "slave": 0, "address": 2106, "value": 6}])
+        self.assertTrue(app.st["ev_olife"]["on"])
+
+    def test_olife_stops_with_zero_amps(self):
+        app = self._all_on_but_olife(**{OLIFE.replace(".", "__"): "6", GRID: "-3000",
+                                        EV_A.replace(".", "__"): "6"})
+        app.loop({})
+        writes = [kw["value"] for s, kw in app.calls if s == "modbus/write_register"]
+        self.assertEqual(writes, [0])
+        self.assertFalse(app.st["ev_olife"]["on"])
+
+    def test_olife_ramps_up(self):
+        app = self._all_on_but_olife(**{OLIFE.replace(".", "__"): "6", GRID: "3000"})
+        app.loop({})
+        self.assertGreater(float(app.states[OLIFE]), 6)
 
     def test_dry_run_calls_nothing(self):
         sm.DRY_RUN = True

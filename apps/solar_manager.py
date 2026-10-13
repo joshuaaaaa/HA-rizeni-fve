@@ -134,11 +134,17 @@ CFG = {
             "cheap": True, "enabled": True,
         },
         {
+            # Olife přes Modbus (hub „olife_energy“ v configuration.yaml).
+            # Nemá vypínač — proud se zapisuje do registru 2106 „Current Limit Control“,
+            # 0 A = nenabíjet. Zpětně se čte senzor „Current Limit Control“.
             "id": "ev_olife", "name": "Wallbox Olife (Modbus)", "type": "ev",
-            "switch": "switch.olife_DOPLNIT",                # ZMĚŇ
-            "current": "number.olife_DOPLNIT",               # ZMĚŇ (nebo None)
-            "min_a": 6, "max_a": 16, "phases": 3,
-            "cheap": True, "enabled": False,                 # zapni, až vyplníš
+            "modbus": {
+                "hub": "olife_energy", "slave": 0, "register": 2106,
+                "readback": "sensor.current_limit_control",
+                "off_amps": 0,
+            },
+            "min_a": 6, "max_a": 16, "phases": 3,            # ZMĚŇ max. proud / fáze
+            "cheap": True, "enabled": True,
         },
     ],
 }
@@ -163,8 +169,8 @@ class SolarManager(hass.Hass):
 
         for l in self.loads:
             amps = l.get("min_a", 0)
-            if l["type"] == "ev" and l.get("current"):
-                real = self.num(l["current"])
+            if self.adjustable(l):
+                real = self.num(self.amps_entity(l))
                 if real is not None:
                     amps = int(real)
             self.st[l["id"]] = {"on": self.real_on(l) or False, "t": 0.0, "amps": amps}
@@ -183,7 +189,8 @@ class SolarManager(hass.Hass):
         if self.c["battery_control"]:
             ents += [e for e, _ in self.c["normal_selects"] + self.c["grid_charge_selects"]]
         for l in self.loads:
-            ents += [l.get("entity"), l.get("switch"), l.get("current")]
+            ents += [l.get("entity"), l.get("switch"), l.get("current"),
+                     l.get("modbus", {}).get("readback")]
         for e in ents:
             if e and not self.entity_exists(e):
                 self.log(f"✗ Entita {e} v HA neexistuje — zkontroluj název v konfiguraci",
@@ -278,6 +285,9 @@ class SolarManager(hass.Hass):
         return out
 
     def real_on(self, l):
+        if l.get("modbus"):
+            amps = self.num(l["modbus"]["readback"])
+            return None if amps is None else amps >= l["min_a"]
         ent = l.get("switch") if l["type"] == "ev" else l.get("entity")
         if l["type"] == "climate_boost" or not ent:
             return None
@@ -345,10 +355,10 @@ class SolarManager(hass.Hass):
                 need = self.need_a(l)
                 if free_a >= need and self.can_change(l, True):
                     self.turn(l, True, "levná cena")
-                    if l["type"] == "ev" and l.get("current"):
+                    if self.adjustable(l):
                         self.set_amps(l, min(l["max_a"], l["min_a"] + free_a - need))
                     return  # jeden spotřebič za krok (rozběhové proudy)
-            elif l["type"] == "ev" and l.get("current"):
+            elif self.adjustable(l):
                 # běžící wallbox přidat až na maximum, co jistič dovolí
                 if free_a >= 2:
                     self.set_amps(l, min(l["max_a"], s["amps"] + free_a - 1))
@@ -363,7 +373,7 @@ class SolarManager(hass.Hass):
         if surplus < -hyst:
             for l in reversed(self.loads):
                 s = self.st[l["id"]]
-                if s["on"] and l["type"] == "ev" and l.get("current") and s["amps"] > l["min_a"]:
+                if s["on"] and self.adjustable(l) and s["amps"] > l["min_a"]:
                     step = -surplus / (VOLTAGE * l["phases"])
                     self.set_amps(l, max(l["min_a"], s["amps"] - max(1, step)))
                     return
@@ -373,7 +383,7 @@ class SolarManager(hass.Hass):
         # Běžící wallboxy doladit podle přebytku
         for l in self.loads:
             s = self.st[l["id"]]
-            if s["on"] and l["type"] == "ev" and l.get("current") and surplus > hyst \
+            if s["on"] and self.adjustable(l) and surplus > hyst \
                     and s["amps"] < l["max_a"]:
                 step = (surplus - hyst) / (VOLTAGE * l["phases"])
                 if step >= 1 and (not phase_ok or free_a >= step):
@@ -389,7 +399,7 @@ class SolarManager(hass.Hass):
                 continue
             if surplus >= self.power_w(l) + hyst and free_a >= self.need_a(l) and self.can_change(l, True):
                 self.turn(l, True, f"přebytek {surplus:.0f} W")
-                if l["type"] == "ev" and l.get("current"):
+                if self.adjustable(l):
                     self.set_amps(l, l["min_a"])
                 return
             break  # nepřeskakovat priority
@@ -409,6 +419,10 @@ class SolarManager(hass.Hass):
         self.log(f"{'▶ ZAPÍNÁM' if on else '■ VYPÍNÁM'} {l['name']} — {reason}")
         if l["type"] == "switch":
             self.switch(l["entity"], on)
+        elif l.get("modbus"):
+            # Modbus wallbox nemá vypínač: zapnout = poslat min. proud, vypnout = 0 A
+            self.modbus_write(l, l["min_a"] if on else l["modbus"].get("off_amps", 0))
+            s["amps"] = l["min_a"]
         elif l["type"] == "ev":
             self.switch(l["switch"], on)
         elif l["type"] == "select_mode":
@@ -433,11 +447,26 @@ class SolarManager(hass.Hass):
             return
         self.log(f"{l['name']}: proud {s['amps']} → {amps} A")
         s["amps"] = amps
+        if l.get("modbus"):
+            self.modbus_write(l, amps)
+            return
         ent = l["current"]
         if ent.startswith("select."):
             self.send(ent, str(amps), "select/select_option", entity_id=ent, option=str(amps))
         else:
             self.send(ent, amps, "number/set_value", entity_id=ent, value=amps)
+
+    def modbus_write(self, l, amps):
+        m = l["modbus"]
+        self.send(m["readback"], int(amps), "modbus/write_register",
+                  hub=m["hub"], slave=m.get("slave", 0), address=m["register"], value=int(amps))
+
+    def adjustable(self, l):
+        """Wallbox, kterému jde nastavovat proud."""
+        return l["type"] == "ev" and bool(l.get("current") or l.get("modbus"))
+
+    def amps_entity(self, l):
+        return l["modbus"]["readback"] if l.get("modbus") else l["current"]
 
     def send(self, key, desired, service, **kw):
         # pozor: parametr se nesmí jmenovat „value“ — koliduje s value=… pro number/set_value
