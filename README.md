@@ -6,7 +6,7 @@ AppDaemon aplikace, která každých 30 s rozhoduje, kam poslat elektřinu:
 |---|---|
 | **Přebytek z FVE** (jde do sítě) | Zapne spotřebiče podle priority: bojler → wallbox 1 → wallbox 2 → TČ. Wallboxům s nastavitelným proudem plynule přidává/ubírá ampéry. |
 | **Levná spotová cena** (pod 1,5 Kč/kWh) | Nabíjí baterii ze sítě (do 90 %) a zapne spotřebiče označené `cheap` i ze sítě. |
-| **Záporná cena** | Vypne přetoky do sítě (export 0 W), nabíjí baterii, zapíná spotřebiče. |
+| **Záporná cena** | Nabíjí baterii a zapíná spotřebiče. Limit přetoků do sítě **nemění**, ten zůstává tvým automatizacím. |
 | **Normální / drahá cena** | Baterie kryje dům (Self Use), spotřebiče běží jen z přebytku. Jakmile začnou brát ze sítě **nebo z baterie**, vypínají se (od nejméně důležitého). |
 | **Hrozí vypadnutí hlavního jističe** (fáze > 23 A) | Okamžitě vypne nejméně důležitý spotřebič. |
 
@@ -45,7 +45,6 @@ Nechceš ho? V konfiguraci dej `"master_switch": ""`.
 | Výkon do/ze sítě (W) | `solax measured power` (nebo `grid`) | `grid_power` |
 | Proudy fází **ze sítě** (A) | `solax current` | `phase_currents` |
 | Pracovní režim střídače | `solax charger use mode` | `work_mode_select` |
-| Limit přetoků (W) | `solax export` | `export_limit` |
 | Bojler (relé/Shelly) | `bojler`, `shelly` | `loads → boiler → entity` |
 | Wallbox 1 – zapnutí nabíjení | název wallboxu | `ev1 → switch` |
 | Wallbox 1 – nabíjecí proud | název wallboxu + `current` | `ev1 → current` |
@@ -76,7 +75,7 @@ Tipy:
 **Automatizace, které se se skriptem perou.** Před ostrým provozem je vypni (Nastavení → Automatizace), jinak budou dvě věci ovládat totéž:
 
 * pro oba wallboxy: `EV Charging – Enhanced Dynamic Control`, `EV Charging – Morning Reset / Night Stop`, `Spuštění nabíjení`, `Start/Stop nabíjení …` a `Ukončení nabíjení`, pokud ovládají tuto nabíječku,
-* pro baterii (jen když zapneš `battery_control`): `Solax – řízení podle spot ceny`, `Nabíjení baterie start/stop`, `Vybíjení baterie do sítě podle spotu START/STOP`, `Sync … export limit` a `Nastavení doby trvání režimu Solax`.
+* pro baterii (jen když zapneš `battery_control`): `Solax – řízení podle spot ceny`, `Nabíjení baterie start/stop`, `Vybíjení baterie do sítě podle spotu START/STOP` a `Nastavení doby trvání režimu Solax`.
 
 **Olife – ověření ručně (jednou, před ostrým provozem):** v **Nástroje pro vývojáře → Akce** spusť
 

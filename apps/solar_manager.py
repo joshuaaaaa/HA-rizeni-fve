@@ -68,7 +68,7 @@ CFG = {
     "phase_currents":   [],   # alternativa: senzory proudu fází ze sítě [A]
 
     # ── Řízení baterie ───────────────────────────────────────────────
-    # False = skript baterii a přetoky NEŘÍDÍ (máš na to vlastní automatizace).
+    # False = skript baterii NEŘÍDÍ (máš na to vlastní automatizace).
     # Zapni až po vypnutí automatizací „Solax – řízení podle spot ceny“,
     # „Nabíjení baterie start/stop“, „Vybíjení baterie do sítě…“, „Sync … export limit“.
     "battery_control":  False,
@@ -81,8 +81,10 @@ CFG = {
         ("select.solax_manual_mode_select", "Force Charge"),
         ("select.solax_charger_use_mode", "Manual Mode"),
     ],
-    "export_limit":     "number.solax_export_control_user_limit",  # [W]
-    "export_limit_max": 15000,   # běžný limit přetoků [W] (number.solax_config_max_export)
+    # Limit přetoků do sítě: "" = skript ho NIKDY nemění (number.solax_export_control_user_limit
+    # zůstává pod kontrolou tvých automatizací).
+    "export_limit":     "",
+    "export_limit_max": 15000,   # použije se jen při vyplněném export_limit [W]
 
     # ── Baterie (23 kWh dle BMS) ─────────────────────────────────────
     "battery_capacity_kwh":   23,

@@ -174,10 +174,21 @@ class Tests(unittest.TestCase):
         finally:
             sm.CFG["battery_control"] = True
 
-    def test_negative_price_export_zero(self):
-        app = make(**{PRICE: "-0.5"})
-        app.loop({})
-        self.assertEqual(app.states[EXPORT], "0.0")
+    def test_export_limit_never_touched(self):
+        for price in ("-0.5", "1.0", "3.0", "6.0"):
+            app = make(**{PRICE: price, GRID: "5000"})
+            app.loop({})
+            self.assertNotIn(EXPORT, [e for _, e in services(app)], price)
+            self.assertEqual(app.states[EXPORT], "15000")
+
+    def test_negative_price_export_zero_when_configured(self):
+        sm.CFG["export_limit"] = EXPORT
+        try:
+            app = make(**{PRICE: "-0.5"})
+            app.loop({})
+            self.assertEqual(app.states[EXPORT], "0.0")
+        finally:
+            sm.CFG["export_limit"] = ""
 
     def test_manual_change_restored(self):
         app = make(**{PRICE: "1.0"})
